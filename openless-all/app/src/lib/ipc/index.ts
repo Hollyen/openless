@@ -20,6 +20,22 @@ export { isTauri, invokeOrMock, getPlatformCapabilities } from "./shared"
 // settings
 export { getSettings, getDefaultStyleSystemPrompts, setSettings } from "./settings"
 
+// ocr
+export type { OcrSettings } from "./ocr"
+export type { OcrProvider, DownloadStatus } from "../types"
+export {
+    getOcrSettings,
+    setOcrSettings,
+    getOcrProviders,
+    startOcrModelDownload,
+    cancelOcrModelDownload,
+    getOcrDownloadStatus,
+    deleteOcrModels,
+    testOcrRecognition,
+    OCR_ERROR_SCREEN_RECORDING_DENIED,
+    OCR_ERROR_WINRT_LANGUAGE_MISSING,
+} from "./ocr"
+
 // asr-credentials
 export type { ProviderCheckResult, ProviderModelsResult } from "./asr-credentials"
 export {

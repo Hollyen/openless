@@ -53,6 +53,10 @@ export let mockSettings: UserPreferences = {
     pipelineMode: "traditional",
     multimodalPipelineEnabled: false,
     activeOmniProvider: "custom",
+    screenContextEnabled: false,
+    activeOcrProvider: "disabled",
+    ocrModelsBaseDir: "",
+    ocrDownloadMirror: "",
     llmThinkingEnabled: false,
     useSystemProxy: true,
     restoreClipboardAfterPaste: true,
@@ -443,7 +447,12 @@ export function composeMockStylePackRuntimeDiagnostics(
                   ...hotwordLines.map((word) => `- ${word}`),
               ].join("\n")
             : ""
-    const singleTurnPrompt = [contextPremise, trimmedPrompt, hotwordBlock]
+    const screenContextBlock = [
+        "Screen context (OCR of current screen; used only for reference):",
+        "- Example UI text",
+        "- Another line from the screenshot",
+    ].join("\n")
+    const singleTurnPrompt = [contextPremise, trimmedPrompt, hotwordBlock, screenContextBlock]
         .filter(Boolean)
         .join("\n\n")
     const historyInstruction =
@@ -467,8 +476,11 @@ export function composeMockStylePackRuntimeDiagnostics(
         workingLanguages: [...mockSettings.workingLanguages],
         hotwords: [...hotwordLines],
         contextWindowMinutes: mockSettings.polishContextWindowMinutes,
+        screenContextBlock,
+        screenContextBlockChars: screenContextBlock.length,
         includesContextPremise: Boolean(contextPremise),
         includesHotwordBlock: hotwordLines.length > 0,
+        includesScreenContextBlock: true,
         includesHistoryInstruction: true,
         previewOmitsFrontApp: true,
     }

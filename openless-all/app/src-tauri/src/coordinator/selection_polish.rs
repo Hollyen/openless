@@ -215,6 +215,7 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
             &raw_text,
             effective_mode,
             &hotwords,
+            None,
             &selection_style_prompt,
             &prefs.working_languages,
             prefs.chinese_script_preference,

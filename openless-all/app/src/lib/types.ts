@@ -24,6 +24,26 @@ export type {
 
 export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 
+/** OCR 提供方描述（屏幕上下文设置页使用）。 */
+export interface OcrProvider {
+  id: string;
+  name: string;
+  description: string;
+  local: boolean;
+  requiresDownload: boolean;
+  supportedPlatforms: string[];
+}
+
+/** OCR 模型下载状态。 */
+export interface DownloadStatus {
+  providerId: string;
+  modelId: string;
+  state: 'not_started' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+  bytesTotal?: number;
+  bytesDownloaded?: number;
+  error?: string;
+}
+
 /** 识别管线模式（issue #902）：traditional = ASR + LLM 两段式；
  *  multimodal = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
  *  两套配置在凭据库中完全隔离，运行时只读当前模式。 */
@@ -267,6 +287,8 @@ export interface StylePackRuntimeDiagnostics {
   contextPremiseChars: number;
   hotwordBlock: string;
   hotwordBlockChars: number;
+  screenContextBlock: string;
+  screenContextBlockChars: number;
   historyInstruction: string;
   historyInstructionChars: number;
   singleTurnPrompt: string;
@@ -278,6 +300,7 @@ export interface StylePackRuntimeDiagnostics {
   contextWindowMinutes: number;
   includesContextPremise: boolean;
   includesHotwordBlock: boolean;
+  includesScreenContextBlock: boolean;
   includesHistoryInstruction: boolean;
   previewOmitsFrontApp: boolean;
 }
@@ -314,6 +337,14 @@ export interface UserPreferences {
   multimodalPipelineEnabled: boolean;
   /** 多模态（Omni）模型当前激活的 provider id，镜像凭据库 omni.active。 */
   activeOmniProvider: string;
+  /** 屏幕上下文（OCR 截图）功能总开关。默认 false。 */
+  screenContextEnabled: boolean;
+  /** 当前激活的 OCR 提供方 id（disabled / winrt / rapidocr）。 */
+  activeOcrProvider: string;
+  /** OCR 模型本地缓存根目录。 */
+  ocrModelsBaseDir: string;
+  /** OCR 模型下载镜像前缀。 */
+  ocrDownloadMirror: string;
   /** LLM 思考模式开关。默认关闭；OpenAI 普通 chat 模型会跳过不支持的字段。详见 issue #402。 */
   llmThinkingEnabled: boolean;
   /** 是否使用系统代理（issue #869）。默认开启；关闭后所有请求直连，境外服务（GitHub 登录/更新等）可能连不上。 */

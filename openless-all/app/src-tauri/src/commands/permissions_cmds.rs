@@ -61,7 +61,7 @@ pub fn request_microphone_permission(app: AppHandle) -> PermissionStatus {
     crate::request_microphone_from_foreground(&app)
 }
 
-/// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone".
+/// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone" | "screen-recording".
 #[tauri::command]
 pub fn open_system_settings(pane: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -72,6 +72,9 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
             }
             "microphone" => {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
+            "screen-recording" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
             }
             _ => "x-apple.systempreferences:com.apple.preference.security?Privacy",
         };

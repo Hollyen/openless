@@ -1,0 +1,13 @@
+[package]
+name = "OpenLessIme"
+version = "1.3.16"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+name = "OpenLessIme"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

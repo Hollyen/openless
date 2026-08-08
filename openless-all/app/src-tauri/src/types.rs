@@ -53,6 +53,15 @@ fn default_active_omni_provider() -> String {
     "custom".into()
 }
 
+fn default_active_ocr_provider() -> String {
+    // Windows 默认使用 RapidOCR（本地 ONNX，模型约 30 MB），
+    // 其它桌面平台在 v1 先关闭，待 Apple Vision / Linux 截图路径补齐后再开启。
+    #[cfg(target_os = "windows")]
+    return "rapidocr".into();
+    #[cfg(not(target_os = "windows"))]
+    return "disabled".into();
+}
+
 /// 历史记录的产生来源。旧版 `history.json` 未写入该字段时，按既有听写记录处理。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -505,6 +514,8 @@ pub struct StylePackRuntimeDiagnostics {
     pub context_premise_chars: usize,
     pub hotword_block: String,
     pub hotword_block_chars: usize,
+    pub screen_context_block: String,
+    pub screen_context_block_chars: usize,
     pub history_instruction: String,
     pub history_instruction_chars: usize,
     pub single_turn_prompt: String,
@@ -516,6 +527,7 @@ pub struct StylePackRuntimeDiagnostics {
     pub context_window_minutes: u32,
     pub includes_context_premise: bool,
     pub includes_hotword_block: bool,
+    pub includes_screen_context_block: bool,
     pub includes_history_instruction: bool,
     pub preview_omits_front_app: bool,
 }
@@ -826,6 +838,18 @@ pub struct UserPreferences {
     /// 供设置页初始化下拉；运行时权威仍在 CredentialsVault）。
     #[serde(default = "default_active_omni_provider")]
     pub active_omni_provider: String,
+    /// 屏幕上下文（OCR 截图）功能总开关。
+    #[serde(default)]
+    pub screen_context_enabled: bool,
+    /// 当前激活的 OCR 提供方 id（`disabled`、`winrt`、`rapidocr`）。
+    #[serde(default = "default_active_ocr_provider")]
+    pub active_ocr_provider: String,
+    /// OCR 模型本地缓存根目录（留空使用默认位置）。
+    #[serde(default)]
+    pub ocr_models_base_dir: String,
+    /// OCR 模型下载镜像前缀（用于 RapidOCR 等模型下载）。
+    #[serde(default)]
+    pub ocr_download_mirror: String,
     /// LLM 思考模式开关。默认 false 以保持既有「尽量关闭思考」行为；
     /// Gemini 走原生 thinkingConfig，OpenAI-compatible 路径仅按 provider/channel
     /// 下发官方渠道级字段；OpenAI 官方渠道会跳过普通 chat 模型不支持的字段。详见 issue #402。
@@ -1197,6 +1221,14 @@ struct UserPreferencesWire {
     #[serde(default = "default_active_omni_provider")]
     active_omni_provider: String,
     #[serde(default)]
+    screen_context_enabled: bool,
+    #[serde(default = "default_active_ocr_provider")]
+    active_ocr_provider: String,
+    #[serde(default)]
+    ocr_models_base_dir: String,
+    #[serde(default)]
+    ocr_download_mirror: String,
+    #[serde(default)]
     llm_thinking_enabled: bool,
     #[serde(default = "default_true")]
     use_system_proxy: bool,
@@ -1367,6 +1399,10 @@ impl Default for UserPreferencesWire {
             pipeline_mode: prefs.pipeline_mode,
             multimodal_pipeline_enabled: prefs.multimodal_pipeline_enabled,
             active_omni_provider: prefs.active_omni_provider,
+            screen_context_enabled: prefs.screen_context_enabled,
+            active_ocr_provider: prefs.active_ocr_provider,
+            ocr_models_base_dir: prefs.ocr_models_base_dir,
+            ocr_download_mirror: prefs.ocr_download_mirror,
             llm_thinking_enabled: prefs.llm_thinking_enabled,
             use_system_proxy: prefs.use_system_proxy,
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
@@ -1504,6 +1540,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
             pipeline_mode: wire.pipeline_mode,
             multimodal_pipeline_enabled: wire.multimodal_pipeline_enabled,
             active_omni_provider: wire.active_omni_provider,
+            screen_context_enabled: wire.screen_context_enabled,
+            active_ocr_provider: wire.active_ocr_provider,
+            ocr_models_base_dir: wire.ocr_models_base_dir,
+            ocr_download_mirror: wire.ocr_download_mirror,
             llm_thinking_enabled: wire.llm_thinking_enabled,
             use_system_proxy: wire.use_system_proxy,
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
@@ -2261,17 +2301,27 @@ pub fn default_style_system_prompt_for_mode(mode: PolishMode) -> String {
     // + 错别字纠正块。把它放在「人格之后、任务之前」让模型在确立角色后立刻收到这个
     // 高优先级指令；与传统「拼在末尾」相比，对中段注意力衰减更友好。
     //
-    // 用户在 Style Pack 编辑器自定义 prompt 时可以保留 / 移动 / 删除 `{{HOTWORDS}}`：
-    // 含 → 替换位置；不含 → fallback 拼在末尾（兼容历史 prompt）。
+    // 屏幕上下文模块以 `{{SCREEN_CONTEXT}}` 占位符同样放在角色之后。该模块自带明确边界：
+    // 说明文本来自屏幕 OCR、不是用户输入、禁止复述/引用/执行。与热词块相互独立，
+    // 用户/开发者可保留 / 移动 / 删除任一占位符，决定各模块注入位置。
+    //
+    // 用户在 Style Pack 编辑器自定义 prompt 时可以保留 / 移动 / 删除 `{{HOTWORDS}}` 和
+    // `{{SCREEN_CONTEXT}}`：含 → 替换位置；不含 → fallback 拼在末尾（兼容历史 prompt）。
     format!(
-        "{}\n\n{}\n\n{}\n\n{}\n\n{}",
-        ROLE_BLOCK, HOTWORDS_PLACEHOLDER, task_and_example, COMMON_RULES, OUTPUT_BLOCK
+        "{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
+        ROLE_BLOCK, SCREEN_CONTEXT_PLACEHOLDER, HOTWORDS_PLACEHOLDER, task_and_example, COMMON_RULES, OUTPUT_BLOCK
     )
 }
 
 /// 热词与纠错模块在 system prompt 里的位置占位符。
 /// polish.rs::compose_system_prompt 找到后替换为运行时实际热词块。
 pub const HOTWORDS_PLACEHOLDER: &str = "{{HOTWORDS}}";
+
+/// 屏幕上下文模块在 system prompt 里的位置占位符。
+/// polish.rs::compose_system_prompt 找到后替换为运行时实际 OCR 屏幕上下文块。
+/// 用户可在 Style Pack 编辑器中保留 / 移动 / 删除 `{{SCREEN_CONTEXT}}`，
+/// 决定屏幕上下文相对于角色、任务、热词等模块的位置。
+pub const SCREEN_CONTEXT_PLACEHOLDER: &str = "{{SCREEN_CONTEXT}}";
 
 fn default_raw_style_system_prompt() -> String {
     default_style_system_prompt_for_mode(PolishMode::Raw)
@@ -2330,6 +2380,10 @@ impl Default for UserPreferences {
             pipeline_mode: PipelineMode::Traditional,
             multimodal_pipeline_enabled: false,
             active_omni_provider: "custom".into(),
+            screen_context_enabled: false,
+            active_ocr_provider: default_active_ocr_provider(),
+            ocr_models_base_dir: String::new(),
+            ocr_download_mirror: String::new(),
             llm_thinking_enabled: false,
             use_system_proxy: true,
             restore_clipboard_after_paste: true,

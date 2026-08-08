@@ -74,9 +74,11 @@ mod qa_session;
 mod resources;
 #[cfg(not(mobile))]
 pub(crate) mod selection_polish;
+mod screen_context;
 mod silence_auto_stop;
 
 use asr_wiring::*;
+use screen_context::*;
 // providers.rs 的 ASR 验证路径按 provider 的真实请求格式发送探针（issue #837），
 // 需要跨模块访问 whisper 兼容系的格式映射，显式再导出。
 pub(crate) use asr_wiring::whisper_request_format;
@@ -2083,10 +2085,13 @@ impl Coordinator {
         let front_app = capture_frontmost_app();
         // repolish 是用户主动对单条历史"重新润色"，不应该被对话感知上下文影响——
         // 用户改的就是这一条本身，不要把别的会话拿进来。所以始终走单轮路径。
+        // 屏幕上下文同样不捕获：历史重润色是显式、独立的操作，注入当前屏幕 OCR
+        // 反而可能误导模型（与 selection_polish 传 None 同口径）。
         polish_text(
             &raw_text,
             effective_mode,
             &hotwords,
+            None,
             &style_system_prompt,
             &working_languages,
             chinese_script_preference,
@@ -2255,9 +2260,12 @@ impl Coordinator {
     ) -> crate::types::StylePackRuntimeDiagnostics {
         let prefs = self.inner.prefs.get();
         let hotwords = enabled_phrases(&self.inner);
+        let sample_screen_context =
+            "(示例：当前屏幕可见文本来自 OCR，实际运行时由 screen_context.rs 捕获)";
         let single_turn = crate::polish::assemble_polish_system_prompt(
             &style_pack.prompt,
             &hotwords,
+            Some(sample_screen_context),
             &prefs.working_languages,
             prefs.chinese_script_preference,
             prefs.output_language_preference,
@@ -2267,6 +2275,7 @@ impl Coordinator {
         let multi_turn = crate::polish::assemble_polish_system_prompt(
             &style_pack.prompt,
             &hotwords,
+            Some(sample_screen_context),
             &prefs.working_languages,
             prefs.chinese_script_preference,
             prefs.output_language_preference,
@@ -2282,6 +2291,8 @@ impl Coordinator {
             context_premise_chars: single_turn.context_premise.chars().count(),
             hotword_block: single_turn.hotword_block.clone(),
             hotword_block_chars: single_turn.hotword_block.chars().count(),
+            screen_context_block: single_turn.screen_context_block.clone(),
+            screen_context_block_chars: single_turn.screen_context_block.chars().count(),
             history_instruction: multi_turn.history_instruction.clone(),
             history_instruction_chars: multi_turn.history_instruction.chars().count(),
             single_turn_prompt: single_turn.effective_system_prompt.clone(),
@@ -2293,6 +2304,7 @@ impl Coordinator {
             context_window_minutes: prefs.polish_context_window_minutes,
             includes_context_premise: single_turn.includes_context_premise,
             includes_hotword_block: single_turn.includes_hotword_block,
+            includes_screen_context_block: single_turn.includes_screen_context_block,
             includes_history_instruction: multi_turn.includes_history_instruction,
             preview_omits_front_app: true,
         }

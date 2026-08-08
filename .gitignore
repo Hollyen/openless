@@ -73,6 +73,9 @@ openless-all/app/windows-ime/Win32/
 openless-all/app/windows-ime/Release/
 openless-all/app/windows-ime/obj/
 
+# ONNX Runtime dynamic library copied only for local Windows packaging (do not commit)
+openless-all/app/src-tauri/onnxruntime.dll
+
 # Planning docs are kept local only, not published to the public repo.
 docs/plans/
 

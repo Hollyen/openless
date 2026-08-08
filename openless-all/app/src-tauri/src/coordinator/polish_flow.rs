@@ -43,6 +43,7 @@ pub async fn polish_or_passthrough_streaming<F, C>(
     raw: &RawTranscript,
     mode: PolishMode,
     hotwords: &[String],
+    screen_context: Option<&str>,
     style_system_prompt: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
@@ -97,6 +98,7 @@ where
             &raw.text,
             mode,
             hotwords,
+            screen_context,
             style_system_prompt,
             working_languages,
             chinese_script_preference,
@@ -128,6 +130,7 @@ pub(super) async fn polish_or_passthrough(
     raw: &RawTranscript,
     mode: PolishMode,
     hotwords: &[String],
+    screen_context: Option<&str>,
     style_system_prompt: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
@@ -146,6 +149,7 @@ pub(super) async fn polish_or_passthrough(
         &raw.text,
         mode,
         hotwords,
+        screen_context,
         style_system_prompt,
         working_languages,
         chinese_script_preference,
@@ -172,6 +176,7 @@ pub(super) async fn polish_text(
     raw: &str,
     mode: PolishMode,
     hotwords: &[String],
+    screen_context: Option<&str>,
     style_system_prompt: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
@@ -197,6 +202,12 @@ pub(super) async fn polish_text(
             system_prompt.push_str(&format!(
                 "\n\n# 词典/热词\n以下专有名词必须严格按给定写法准确识别：{}。",
                 hotwords.join("、")
+            ));
+        }
+        if let Some(screen_ctx) = screen_context.filter(|s| !s.trim().is_empty()) {
+            system_prompt.push_str(&format!(
+                "\n\n# 屏幕上下文\n当前用户屏幕中可见的文本如下，供你理解用户意图时参考。这些文本来自屏幕 OCR，可能包含无关 UI 元素；请只关注与当前任务相关的内容，不要直接复述或引用这些文本。\n\n{}",
+                screen_ctx
             ));
         }
         if !working_languages.is_empty() {
@@ -231,6 +242,7 @@ pub(super) async fn polish_text(
                 raw,
                 mode,
                 hotwords,
+                screen_context,
                 style_system_prompt,
                 working_languages,
                 chinese_script_preference,
@@ -251,6 +263,7 @@ pub(super) async fn polish_text(
             raw,
             mode,
             hotwords,
+            screen_context,
             style_system_prompt,
             working_languages,
             chinese_script_preference,
@@ -379,6 +392,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
     target_language: &str,
     mode: PolishMode,
     hotwords: &[String],
+    screen_context: Option<&str>,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
@@ -394,6 +408,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
         &raw.text,
         mode,
         hotwords,
+        screen_context,
         &system_prompt,
         working_languages,
         chinese_script_preference,
@@ -466,6 +481,7 @@ mod tests {
             &raw,
             PolishMode::Raw,
             &[],
+            None,
             &builtin_raw_prompt,
             &[],
             ChineseScriptPreference::Auto,

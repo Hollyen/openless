@@ -252,6 +252,7 @@ async fn run_streaming_polish(
     raw: &RawTranscript,
     mode: PolishMode,
     hotwords: &[String],
+    screen_context: Option<&str>,
     style_system_prompt: &str,
     working_languages: &[String],
     chinese_script_preference: crate::types::ChineseScriptPreference,
@@ -274,6 +275,7 @@ async fn run_streaming_polish(
             raw,
             mode,
             hotwords,
+            screen_context,
             style_system_prompt,
             working_languages,
             chinese_script_preference,
@@ -307,6 +309,7 @@ async fn run_streaming_polish(
                 raw,
                 mode,
                 hotwords,
+                screen_context,
                 style_system_prompt,
                 working_languages,
                 chinese_script_preference,
@@ -364,6 +367,7 @@ async fn run_streaming_polish(
         raw,
         mode,
         hotwords,
+        screen_context,
         style_system_prompt,
         working_languages,
         chinese_script_preference,
@@ -465,6 +469,7 @@ async fn run_streaming_polish(
                 raw,
                 mode,
                 hotwords,
+                screen_context,
                 style_system_prompt,
                 working_languages,
                 chinese_script_preference,
@@ -3803,6 +3808,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 只累计 provider 请求本身的耗时。流式路径的输入法切换、逐字上屏和队列排空
     // 属于插入阶段，不能混入用于模型对比的 polish_ms。
     let mut llm_elapsed_ms: Option<u64> = None;
+    let screen_context = capture_screen_context(inner).await;
+    let screen_context_ref = screen_context.as_deref();
     let (polished, polish_error, already_streamed) = if translation_active {
         log::info!(
             "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?} front_app={:?}",
@@ -3815,6 +3822,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &translation_target,
             mode,
             &hotword_strs,
+            screen_context_ref,
             &working_languages,
             chinese_script_preference,
             output_language_preference,
@@ -3834,6 +3842,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &raw,
             mode,
             &hotword_strs,
+            screen_context_ref,
             &style_system_prompt,
             &working_languages,
             chinese_script_preference,
@@ -3850,6 +3859,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &raw,
             mode,
             &hotword_strs,
+            screen_context_ref,
             &style_system_prompt,
             &working_languages,
             chinese_script_preference,

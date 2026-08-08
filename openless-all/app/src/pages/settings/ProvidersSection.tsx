@@ -28,6 +28,7 @@ import {
   ASR_PRESETS,
   type AsrPresetId,
 } from './shared';
+import { OcrSection } from './OcrSection';
 import {
   parseAdvancedAsrConfig,
   serializeAdvancedAsrConfig,
@@ -1089,6 +1090,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         />
       </Card>
       )}
+      <OcrSection />
     </>
   );
 }

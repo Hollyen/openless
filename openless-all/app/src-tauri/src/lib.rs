@@ -49,6 +49,7 @@ mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
 mod net;
+mod ocr;
 mod omni;
 mod permissions;
 mod persistence;
@@ -206,6 +207,14 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_correction_rule_enabled,
             commands::list_vocab_presets,
             commands::save_vocab_presets,
+            commands::get_ocr_settings,
+            commands::set_ocr_settings,
+            commands::get_ocr_providers,
+            commands::start_ocr_model_download,
+            commands::cancel_ocr_model_download,
+            commands::get_ocr_download_status,
+            commands::delete_ocr_models,
+            commands::test_ocr_recognition,
             commands::start_dictation,
             commands::stop_dictation,
             commands::cancel_dictation,
