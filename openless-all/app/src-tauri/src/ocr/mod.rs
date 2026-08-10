@@ -71,23 +71,33 @@ pub async fn recognize_screen_text(prefs: &UserPreferences) -> anyhow::Result<Op
     }
 
     // 1. 捕获屏幕：优先只捕获前台窗口，减少像素量和无关噪声；失败时回退全屏主屏。
+    let capture_started = std::time::Instant::now();
     let capture = tokio::task::spawn_blocking({
         let prefs = prefs.clone();
         move || capture_foreground_window(&prefs)
     })
     .await
     .map_err(|e| anyhow::anyhow!("capture task panicked: {e}"))?;
+    let capture_ms = capture_started.elapsed().as_millis() as u64;
 
     let Some(image_bytes) = capture? else {
+        log::info!("[ocr] capture returned no image after {capture_ms}ms");
         return Ok(None);
     };
+    let image_size = image_bytes.len();
 
     // 2. 跑 OCR。WinRT/OCR 引擎内部可能依赖 COM/STA，用 spawn_blocking 避免阻塞 async runtime。
+    let recognize_started = std::time::Instant::now();
     let result = tokio::task::spawn_blocking(move || engine.recognize(&image_bytes))
         .await
         .map_err(|e| anyhow::anyhow!("ocr task panicked: {e}"))?;
+    let recognize_ms = recognize_started.elapsed().as_millis() as u64;
 
     let result = result?;
+    log::info!(
+        "[ocr] capture={capture_ms}ms image_bytes={image_size} recognize={recognize_ms}ms lines={}",
+        result.lines.len()
+    );
     if result.lines.is_empty() {
         return Ok(None);
     }
@@ -100,6 +110,20 @@ pub async fn recognize_screen_text(prefs: &UserPreferences) -> anyhow::Result<Op
         .join("\n");
 
     Ok(Some(text))
+}
+
+/// 将截图降采样到最大 1280px 宽度，以显著降低 RapidOCR 处理高分辨率全屏的耗时。
+/// 保持宽高比，使用 Triangle 滤波（速度与质量均衡）。
+fn downsample_for_ocr(image: image::DynamicImage) -> image::DynamicImage {
+    const MAX_WIDTH: u32 = 1280;
+    let (w, h) = (image.width(), image.height());
+    if w <= MAX_WIDTH {
+        return image;
+    }
+    let scale = MAX_WIDTH as f32 / w as f32;
+    let new_h = (h as f32 * scale).round() as u32;
+    log::info!("[ocr] downsample screenshot {}x{} -> {}x{}", w, h, MAX_WIDTH, new_h);
+    image.resize(MAX_WIDTH, new_h, image::imageops::FilterType::Triangle)
 }
 
 /// 主屏幕截图 → PNG 字节。
@@ -145,6 +169,8 @@ fn capture_primary_screen(_prefs: &UserPreferences) -> anyhow::Result<Option<Vec
             anyhow::anyhow!("capture primary screen: {msg}")
         }
     })?;
+
+    let image = downsample_for_ocr(image.into());
 
     let mut buf = Vec::new();
     image
@@ -224,6 +250,8 @@ fn try_capture_foreground_window(_prefs: &UserPreferences) -> anyhow::Result<Opt
         }
     })?;
 
+    let image = downsample_for_ocr(image.into());
+
     let mut buf = Vec::new();
     image
         .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
@@ -259,6 +287,8 @@ fn try_capture_foreground_window(_prefs: &UserPreferences) -> anyhow::Result<Opt
             anyhow::anyhow!("capture foreground window: {msg}")
         }
     })?;
+
+    let image = downsample_for_ocr(image.into());
 
     let mut buf = Vec::new();
     image

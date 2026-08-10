@@ -3858,7 +3858,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             tasks.remove(&current_session_id)
         };
         if let Some(handle) = handle {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(15), handle).await {
                 Ok(Ok(Some(text))) => {
                     let chars = text.chars().count();
                     log::info!("[screen_context] background task captured {chars} chars");
@@ -3874,7 +3874,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
                 Err(_) => {
                     log::warn!(
-                        "[screen_context] background task timed out after 5s for session {current_session_id}"
+                        "[screen_context] background task timed out after 15s for session {current_session_id}"
                     );
                     None
                 }

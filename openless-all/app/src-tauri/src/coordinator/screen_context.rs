@@ -22,7 +22,7 @@ pub(super) async fn capture_screen_context(inner: &Arc<Inner>) -> Option<String>
     }
 
     match tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(15),
         crate::ocr::recognize_screen_text(&prefs),
     )
     .await
@@ -41,7 +41,7 @@ pub(super) async fn capture_screen_context(inner: &Arc<Inner>) -> Option<String>
             None
         }
         Err(_) => {
-            log::warn!("[screen_context] OCR timed out after 5s");
+            log::warn!("[screen_context] OCR timed out after 15s");
             None
         }
     }
