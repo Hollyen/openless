@@ -88,34 +88,168 @@ pub async fn recognize_screen_text(prefs: &UserPreferences) -> anyhow::Result<Op
 
     // 2. 跑 OCR。WinRT/OCR 引擎内部可能依赖 COM/STA，用 spawn_blocking 避免阻塞 async runtime。
     let recognize_started = std::time::Instant::now();
+    let image_bytes_for_debug = image_bytes.clone();
     let result = tokio::task::spawn_blocking(move || engine.recognize(&image_bytes))
         .await
         .map_err(|e| anyhow::anyhow!("ocr task panicked: {e}"))?;
     let recognize_ms = recognize_started.elapsed().as_millis() as u64;
 
     let result = result?;
+    let raw_count = result.lines.len();
+    let cleaned_lines = clean_ocr_lines(result.lines);
+    let cleaned_count = cleaned_lines.len();
     log::info!(
-        "[ocr] capture={capture_ms}ms image_bytes={image_size} recognize={recognize_ms}ms lines={}",
-        result.lines.len()
+        "[ocr] capture={capture_ms}ms image_bytes={image_size} recognize={recognize_ms}ms raw_lines={raw_count} cleaned_lines={cleaned_count}",
     );
-    if result.lines.is_empty() {
+    if cleaned_lines.is_empty() {
         return Ok(None);
     }
 
-    let text = result
-        .lines
+    let text = cleaned_lines
         .into_iter()
         .map(|line| line.text)
         .collect::<Vec<_>>()
         .join("\n");
 
+    maybe_save_ocr_debug(&image_bytes_for_debug, &text);
+
     Ok(Some(text))
 }
 
-/// 将截图降采样到最大 1280px 宽度，以显著降低 RapidOCR 处理高分辨率全屏的耗时。
+/// 后处理：过滤噪声行（图标/emoji/纯符号）并清理 CJK 字间空格。
+fn clean_ocr_lines(lines: Vec<engine::OcrLine>) -> Vec<engine::OcrLine> {
+    lines
+        .into_iter()
+        .filter_map(|line| {
+            let text = clean_ocr_text(&line.text)?;
+            Some(engine::OcrLine {
+                text,
+                confidence: line.confidence,
+            })
+        })
+        .collect()
+}
+
+fn clean_ocr_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // 过滤 mostly-noise 行（头像、图标、emoji、分割线等）。
+    if is_mostly_noise(trimmed) {
+        return None;
+    }
+    // 过滤常见 IM 时间戳/系统提示行。
+    if is_likely_timestamp_or_meta(trimmed) {
+        return None;
+    }
+    // 去掉 CJK 字符之间的空格（OCR 偶尔把「你 好」拆成「你 好」）。
+    Some(remove_spaces_between_cjk(trimmed))
+}
+
+/// 判断字符串是否主要由无意义符号/emoji 组成。
+fn is_mostly_noise(text: &str) -> bool {
+    let total = text.chars().count();
+    if total == 0 {
+        return true;
+    }
+    let significant = text.chars().filter(|c| is_significant_char(*c)).count();
+    // 有效字符不足一半视为噪声。
+    significant * 2 < total
+}
+
+/// 有效字符：字母数字、CJK 统一表意文字、平假名、片假名、韩文音节。
+fn is_significant_char(c: char) -> bool {
+    c.is_alphanumeric()
+        || ('\u{4E00}'..='\u{9FFF}').contains(&c)
+        || ('\u{3040}'..='\u{309F}').contains(&c)
+        || ('\u{30A0}'..='\u{30FF}').contains(&c)
+        || ('\u{AC00}'..='\u{D7AF}').contains(&c)
+}
+
+/// 简单启发式过滤 IM 中常见的时间戳/状态行。
+fn is_likely_timestamp_or_meta(text: &str) -> bool {
+    // 纯时间，如 "10:30"、"14:20:05"
+    if text
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == ':' || c == '-' || c.is_whitespace())
+        && text.chars().filter(|c| c.is_ascii_digit()).count() >= 3
+    {
+        return true;
+    }
+    // 日期，如 "2024-08-10"、"8/10"
+    if text
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '-' || c == '/' || c == '.' || c == '年' || c == '月' || c == '日')
+        && text.chars().filter(|c| c.is_ascii_digit()).count() >= 4
+    {
+        return true;
+    }
+    // 昨天/今天/上午/下午 + 时间
+    if (text.starts_with("昨天") || text.starts_with("今天") || text.starts_with("上午") || text.starts_with("下午"))
+        && text.chars().any(|c| c.is_ascii_digit())
+    {
+        return true;
+    }
+    false
+}
+
+/// 移除两个 CJK 字符之间的空格。
+fn remove_spaces_between_cjk(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (i, c) in chars.iter().enumerate() {
+        if *c == ' '
+            && i > 0
+            && i + 1 < chars.len()
+            && is_cjk(chars[i - 1])
+            && is_cjk(chars[i + 1])
+        {
+            continue;
+        }
+        out.push(*c);
+    }
+    out
+}
+
+fn is_cjk(c: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&c)
+}
+
+/// 调试辅助：设置环境变量 OPENLESS_OCR_DEBUG=1 时，把截图和最终 OCR 文本保存到
+/// %LOCALAPPDATA%\OpenLess\ocr_debug\（Windows）或对应平台日志目录同级，方便人工核对。
+fn maybe_save_ocr_debug(image_bytes: &[u8], text: &str) {
+    if std::env::var("OPENLESS_OCR_DEBUG").ok().as_deref() != Some("1") {
+        return;
+    }
+    let base = crate::log_dir_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| crate::log_dir_path());
+    let dir = base.join("ocr_debug");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("[ocr] create debug dir failed: {e}");
+        return;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let img_path = dir.join(format!("{ts}_capture.png"));
+    let txt_path = dir.join(format!("{ts}_ocr.txt"));
+    if let Err(e) = std::fs::write(&img_path, image_bytes) {
+        log::warn!("[ocr] write debug image failed: {e}");
+    }
+    if let Err(e) = std::fs::write(&txt_path, text) {
+        log::warn!("[ocr] write debug text failed: {e}");
+    }
+    log::info!("[ocr] debug saved: {}, {}", img_path.display(), txt_path.display());
+}
+
+/// 将截图降采样到最大 1920px 宽度，在保留 IM 小字可读性与控制耗时之间取平衡。
 /// 保持宽高比，使用 Triangle 滤波（速度与质量均衡）。
 fn downsample_for_ocr(image: image::DynamicImage) -> image::DynamicImage {
-    const MAX_WIDTH: u32 = 1280;
+    const MAX_WIDTH: u32 = 1920;
     let (w, h) = (image.width(), image.height());
     if w <= MAX_WIDTH {
         return image;

@@ -371,7 +371,8 @@ impl RapidOcrEngine {
 
         let image = image::load_from_memory(image_bytes)
             .map_err(|e| anyhow::anyhow!("解码 OCR 输入图片失败: {e}"))?;
-        let rgb = image.to_rgb8();
+        let preprocessed = preprocess_for_ocr(image);
+        let rgb = preprocessed.to_rgb8();
         if rgb.width() == 0 || rgb.height() == 0 {
             return Err(anyhow::anyhow!("OCR 输入图片为空"));
         }
@@ -414,7 +415,47 @@ impl RapidOcrEngine {
                 .collect(),
         })
     }
+}
 
+/// 对输入图片做 OCR 前预处理：灰度化 + 对比度拉伸，提升小字、彩色气泡、
+/// 低对比度界面文字的识别率。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn preprocess_for_ocr(image: image::DynamicImage) -> image::DynamicImage {
+    // 1) 灰度化：去掉颜色干扰，让 det/rec 更关注亮度结构。
+    let gray = image.to_luma8();
+
+    // 2) 线性对比度拉伸：把当前最小/最大亮度映射到 0/255，增强浅灰文字与背景的区分。
+    let stretched = contrast_stretch(&gray);
+
+    // 3) 转回 RGB8，因为 rapidocr-core 的 run_image 需要 3 通道图像。
+    let rgb = image::ImageBuffer::from_fn(stretched.width(), stretched.height(), |x, y| {
+        let v = stretched.get_pixel(x, y)[0];
+        image::Rgb([v, v, v])
+    });
+    image::DynamicImage::ImageRgb8(rgb)
+}
+
+/// 对 8bit 灰度图做 min-max 线性对比度拉伸。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn contrast_stretch(gray: &image::GrayImage) -> image::GrayImage {
+    let (min, max) = gray.pixels().fold((255u8, 0u8), |(min, max), p| {
+        let v = p[0];
+        (min.min(v), max.max(v))
+    });
+    if min == max || (max - min) == 255 {
+        return gray.clone();
+    }
+    let range = (max - min) as f32;
+    let min = min as f32;
+    image::ImageBuffer::from_fn(gray.width(), gray.height(), |x, y| {
+        let v = gray.get_pixel(x, y)[0] as f32;
+        let stretched = ((v - min) / range * 255.0).round() as u8;
+        image::Luma([stretched])
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl RapidOcrEngine {
     /// 构建 PP-OCRv6 small 管线配置，模型路径指向本引擎的模型目录。
     ///
     /// `RapidOcrConfig::ppocr_v6_small` 注册表里 rec 模型文件名是
