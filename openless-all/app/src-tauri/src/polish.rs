@@ -3293,6 +3293,33 @@ mod tests {
     }
 
     #[test]
+    fn default_style_prompts_contain_screen_context_placeholder() {
+        for mode in [
+            PolishMode::Raw,
+            PolishMode::Light,
+            PolishMode::Structured,
+            PolishMode::Formal,
+        ] {
+            let prompt = prompts::system_prompt(mode);
+            assert!(
+                prompt.contains("{{SCREEN_CONTEXT}}"),
+                "{mode:?} 默认 prompt 必须包含 {{SCREEN_CONTEXT}} 占位符"
+            );
+        }
+    }
+
+    #[test]
+    fn default_selection_prompts_contain_screen_context_placeholder() {
+        for mode in [PolishMode::Light, PolishMode::Structured, PolishMode::Formal] {
+            let prompt = crate::types::default_selection_polish_style_prompt_for_mode(mode);
+            assert!(
+                prompt.contains("{{SCREEN_CONTEXT}}"),
+                "{mode:?} 默认选区润色 prompt 必须包含 {{SCREEN_CONTEXT}} 占位符"
+            );
+        }
+    }
+
+    #[test]
     fn common_rules_include_auto_correction_and_natural_organization() {
         // 只有 Raw 仍走标准 ROLE_BLOCK / COMMON_RULES / OUTPUT_BLOCK wrapper。
         // Light / Structured / Formal 已切到 v2 PRO 自带 prompt（含独立 ASR 纠错 + 分级策略）。

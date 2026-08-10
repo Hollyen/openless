@@ -66,6 +66,8 @@ const NEW_PACK_PROMPT_TEMPLATE = `# 角色
 const NEW_PACK_SELECTION_PROMPT_TEMPLATE = `# 角色
 你是书面文本润色助手。
 
+{{SCREEN_CONTEXT}}
+
 # 任务
 对用户选中的文字进行语法、清晰度和格式润色，保持本风格包的表达倾向。
 
