@@ -87,6 +87,10 @@ export interface DictationSession {
   llmProvider: string | null;
   /** 本次润色用的 LLM 模型 id。Raw 直通时为 null。 */
   llmModel: string | null;
+  /** 本次 LLM 调用使用的 system prompt。未调用 LLM 时为 null。 */
+  llmSystemPrompt?: string | null;
+  /** 本次 LLM 调用使用的 user prompt。未调用 LLM 时为 null。 */
+  llmUserPrompt?: string | null;
   /** 本次会话走的识别管线模式（"multimodal" / 缺失 = 传统两段式）。 */
   pipelineMode?: string | null;
   /** 松键后等待转写结果的实测耗时（毫秒）。流式 ASR 是收尾延迟，批式是完整转写耗时。 */

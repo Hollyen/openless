@@ -291,6 +291,12 @@ pub struct DictationSession {
     /// 本次润色用的 LLM 模型 id。Raw 直通时 None。
     #[serde(default)]
     pub llm_model: Option<String>,
+    /// 本次 LLM 调用使用的 system prompt。未调用 LLM 时 None。
+    #[serde(default)]
+    pub llm_system_prompt: Option<String>,
+    /// 本次 LLM 调用使用的 user prompt。未调用 LLM 时 None。
+    #[serde(default)]
+    pub llm_user_prompt: Option<String>,
     /// 本次会话走的识别管线模式（"multimodal" / 缺失 = 传统两段式）。
     /// 多模态会话 `asr_provider/asr_model` 为空，`llm_provider/llm_model`
     /// 记实际调用的多模态模型，`polish_ms` 记该调用的耗时。
@@ -4003,6 +4009,8 @@ mod tests {
             asr_model: Some("fun-asr-realtime".into()),
             llm_provider: Some("ark".into()),
             llm_model: Some("deepseek-v3-2".into()),
+            llm_system_prompt: None,
+            llm_user_prompt: None,
             pipeline_mode: None,
             asr_ms: Some(230),
             polish_ms: Some(1450),

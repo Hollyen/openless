@@ -289,6 +289,8 @@ fn apply_retranscription(
     entry.asr_ms = Some(asr_ms);
     entry.llm_provider = None;
     entry.llm_model = None;
+    entry.llm_system_prompt = None;
+    entry.llm_user_prompt = None;
     entry.polish_ms = None;
 }
 
@@ -320,6 +322,8 @@ mod retranscribe_tests {
             asr_model: Some("volc.seedasr.sauc.duration".into()),
             llm_provider: Some("ark".into()),
             llm_model: Some("deepseek-v3-2".into()),
+            llm_system_prompt: None,
+            llm_user_prompt: None,
             pipeline_mode: None,
             asr_ms: Some(15000),
             polish_ms: Some(1200),

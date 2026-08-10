@@ -296,7 +296,7 @@ async fn run_streaming_polish(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
-    llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_call: &mut Option<crate::polish::LlmCallRecord>,
     llm_elapsed_ms: &mut Option<u64>,
 ) -> (String, Option<String>, bool) {
     log::info!(
@@ -2739,6 +2739,8 @@ fn build_transcribe_failed_session(
         asr_model: None,
         llm_provider: None,
         llm_model: None,
+        llm_system_prompt: None,
+        llm_user_prompt: None,
         pipeline_mode: None,
         asr_ms: Some(asr_ms),
         polish_ms: None,
@@ -3676,6 +3678,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             asr_model: asr_model.clone(),
             llm_provider: None,
             llm_model: None,
+            llm_system_prompt: None,
+            llm_user_prompt: None,
             pipeline_mode: None,
             asr_ms: Some(asr_ms),
             polish_ms: None,
@@ -3844,7 +3848,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 一次 LLM 调用的构建时快照：polish 链路在成功构建 provider、即将发起真实调用时
     // 填充（见 polish_flow.rs）。Raw 直通、凭据缺失等 preflight 失败都保持 None——
     // 此时不落 llm_* / polish_ms，避免"没调用却记了模型/耗时"的伪数据（PR #826 review）。
-    let mut llm_call: Option<crate::polish::LlmCallLabel> = None;
+    let mut llm_call: Option<crate::polish::LlmCallRecord> = None;
     // 只累计 provider 请求本身的耗时。流式路径的输入法切换、逐字上屏和队列排空
     // 属于插入阶段，不能混入用于模型对比的 polish_ms。
     let mut llm_elapsed_ms: Option<u64> = None;
@@ -3949,9 +3953,14 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     };
     // 耗时与标签都以「真的发起了 provider 调用」为准；preflight 失败和 Raw 直通均为 None。
     let polish_ms = llm_elapsed_ms;
-    let (llm_provider, llm_model) = match &llm_call {
-        Some(label) => (Some(label.provider.clone()), Some(label.model.clone())),
-        None => (None, None),
+    let (llm_provider, llm_model, llm_system_prompt, llm_user_prompt) = match &llm_call {
+        Some(record) => (
+            Some(record.provider.clone()),
+            Some(record.model.clone()),
+            record.system_prompt.clone(),
+            record.user_prompt.clone(),
+        ),
+        None => (None, None, None, None),
     };
 
     let polished = finalize_polished_text(
@@ -4080,6 +4089,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         asr_model,
         llm_provider,
         llm_model,
+        llm_system_prompt,
+        llm_user_prompt,
         pipeline_mode: None,
         asr_ms: Some(asr_ms),
         polish_ms,
@@ -4292,6 +4303,8 @@ async fn finish_dictation_multimodal(
             asr_model: None,
             llm_provider: Some(omni_label.provider.clone()),
             llm_model: Some(omni_label.model.clone()),
+            llm_system_prompt: None,
+            llm_user_prompt: None,
             pipeline_mode: Some("multimodal".to_string()),
             asr_ms: None,
             polish_ms: Some(omni_ms),
@@ -4427,6 +4440,8 @@ async fn finish_dictation_multimodal(
         asr_model: None,
         llm_provider: Some(omni_label.provider.clone()),
         llm_model: Some(omni_label.model.clone()),
+        llm_system_prompt: None,
+        llm_user_prompt: None,
         pipeline_mode: Some("multimodal".to_string()),
         asr_ms: None,
         polish_ms: Some(omni_ms),
@@ -4837,6 +4852,8 @@ mod tests {
             asr_model: None,
             llm_provider: None,
             llm_model: None,
+            llm_system_prompt: None,
+            llm_user_prompt: None,
             pipeline_mode: None,
             asr_ms: None,
             polish_ms: None,

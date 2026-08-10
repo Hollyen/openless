@@ -51,7 +51,7 @@ pub async fn polish_or_passthrough_streaming<F, C>(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
-    llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_call: &mut Option<crate::polish::LlmCallRecord>,
     llm_elapsed_ms: &mut Option<u64>,
     on_delta: F,
     should_cancel: C,
@@ -84,8 +84,26 @@ where
         );
         return StreamingPolishOutcome::UnsupportedFallback;
     }
-    // 过了所有 early-out、即将发起真实调用——此刻才记录调用快照。
-    *llm_call = Some(provider.call_label());
+    // 过了所有 early-out、即将发起真实调用——此刻才记录调用快照 + 提示词。
+    let label = provider.call_label();
+    let (system_prompt, user_prompt) = crate::polish::compose_polish_prompts(
+        &raw.text,
+        mode,
+        hotwords,
+        screen_context,
+        style_system_prompt,
+        working_languages,
+        chinese_script_preference,
+        output_language_preference,
+        front_app,
+        !prior_turns.is_empty(),
+    );
+    *llm_call = Some(crate::polish::LlmCallRecord {
+        provider: label.provider,
+        model: label.model,
+        system_prompt: Some(system_prompt),
+        user_prompt: Some(user_prompt),
+    });
     log::info!(
         "[coord] streaming polish START: provider=openai-compatible mode={:?} raw_chars={} prior_turns={}",
         mode,
@@ -138,7 +156,7 @@ pub(super) async fn polish_or_passthrough(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
-    llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_call: &mut Option<crate::polish::LlmCallRecord>,
     llm_elapsed_ms: &mut Option<u64>,
     multimodal: bool,
 ) -> (String, Option<String>) {
@@ -184,7 +202,7 @@ pub(super) async fn polish_text(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
-    llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_call: &mut Option<crate::polish::LlmCallRecord>,
     llm_elapsed_ms: &mut Option<u64>,
     multimodal: bool,
 ) -> anyhow::Result<String> {
@@ -193,10 +211,6 @@ pub(super) async fn polish_text(
     if multimodal {
         let provider = super::build_active_omni_provider(llm_thinking_enabled)?;
         let label = provider.call_label();
-        *llm_call = Some(crate::polish::LlmCallLabel {
-            provider: label.provider,
-            model: label.model,
-        });
         let mut system_prompt = style_system_prompt.to_string();
         if !hotwords.is_empty() {
             system_prompt.push_str(&format!(
@@ -216,6 +230,12 @@ pub(super) async fn polish_text(
                 working_languages.join("、")
             ));
         }
+        *llm_call = Some(crate::polish::LlmCallRecord {
+            provider: label.provider,
+            model: label.model,
+            system_prompt: Some(system_prompt.clone()),
+            user_prompt: Some(raw.to_string()),
+        });
         let call_started = std::time::Instant::now();
         let result = provider.complete(&system_prompt, raw, None).await;
         record_llm_elapsed(llm_elapsed_ms, call_started);
@@ -228,10 +248,24 @@ pub(super) async fn polish_text(
     let active_llm = CredentialsVault::get_active_llm();
     if active_llm == "gemini" {
         let (api_key, model, base_url) = read_gemini_credentials()?;
-        // 凭据读取成功、即将发起调用——记录构建时快照（preflight 失败走上面的 ? 提前返回，不会记）。
-        *llm_call = Some(crate::polish::LlmCallLabel {
+        // 凭据读取成功、即将发起调用——记录构建时快照 + 提示词（preflight 失败走上面的 ? 提前返回，不会记）。
+        let (system_prompt, user_prompt) = crate::polish::compose_polish_prompts(
+            raw,
+            mode,
+            hotwords,
+            screen_context,
+            style_system_prompt,
+            working_languages,
+            chinese_script_preference,
+            output_language_preference,
+            front_app,
+            !prior_turns.is_empty(),
+        );
+        *llm_call = Some(crate::polish::LlmCallRecord {
             provider: active_llm.clone(),
             model: model.clone(),
+            system_prompt: Some(system_prompt.clone()),
+            user_prompt: Some(user_prompt.clone()),
         });
         let provider = GeminiProvider::new(
             GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
@@ -256,7 +290,25 @@ pub(super) async fn polish_text(
     }
 
     let provider = build_active_llm_provider(llm_thinking_enabled)?;
-    *llm_call = Some(provider.call_label());
+    let label = provider.call_label();
+    let (system_prompt, user_prompt) = crate::polish::compose_polish_prompts(
+        raw,
+        mode,
+        hotwords,
+        screen_context,
+        style_system_prompt,
+        working_languages,
+        chinese_script_preference,
+        output_language_preference,
+        front_app,
+        !prior_turns.is_empty(),
+    );
+    *llm_call = Some(crate::polish::LlmCallRecord {
+        provider: label.provider,
+        model: label.model,
+        system_prompt: Some(system_prompt),
+        user_prompt: Some(user_prompt),
+    });
     let call_started = std::time::Instant::now();
     let result = provider
         .polish(
@@ -286,16 +338,25 @@ pub(super) async fn translate_text(
     output_language_preference: OutputLanguagePreference,
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
-    llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_call: &mut Option<crate::polish::LlmCallRecord>,
     llm_elapsed_ms: &mut Option<u64>,
 ) -> anyhow::Result<String> {
     // 见 polish_text 顶部注释——同样的 Gemini / OpenAI-compatible 路由逻辑。
     let active_llm = CredentialsVault::get_active_llm();
     if active_llm == "gemini" {
         let (api_key, model, base_url) = read_gemini_credentials()?;
-        *llm_call = Some(crate::polish::LlmCallLabel {
+        let (system_prompt, user_prompt) = crate::polish::compose_translate_prompts(
+            raw,
+            target_language,
+            working_languages,
+            chinese_script_preference,
+            front_app,
+        );
+        *llm_call = Some(crate::polish::LlmCallRecord {
             provider: active_llm.clone(),
             model: model.clone(),
+            system_prompt: Some(system_prompt),
+            user_prompt: Some(user_prompt),
         });
         let provider = GeminiProvider::new(
             GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
@@ -316,7 +377,20 @@ pub(super) async fn translate_text(
     }
 
     let provider = build_active_llm_provider(llm_thinking_enabled)?;
-    *llm_call = Some(provider.call_label());
+    let label = provider.call_label();
+    let (system_prompt, user_prompt) = crate::polish::compose_translate_prompts(
+        raw,
+        target_language,
+        working_languages,
+        chinese_script_preference,
+        front_app,
+    );
+    *llm_call = Some(crate::polish::LlmCallRecord {
+        provider: label.provider,
+        model: label.model,
+        system_prompt: Some(system_prompt),
+        user_prompt: Some(user_prompt),
+    });
     let call_started = std::time::Instant::now();
     let result = provider
         .translate_to(
@@ -399,7 +473,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
-    llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_call: &mut Option<crate::polish::LlmCallRecord>,
     llm_elapsed_ms: &mut Option<u64>,
     multimodal: bool,
 ) -> (String, Option<String>, Option<String>) {
@@ -473,7 +547,7 @@ mod tests {
             text: "原样输出".to_string(),
             duration_ms: 800,
         };
-        let mut llm_call: Option<crate::polish::LlmCallLabel> = None;
+        let mut llm_call: Option<crate::polish::LlmCallRecord> = None;
         let mut llm_elapsed_ms = None;
         // 直通判定：style prompt 等于内置 raw 提示词 → raw_mode_uses_llm 为 false。
         let builtin_raw_prompt = crate::types::StyleSystemPrompts::default().raw;

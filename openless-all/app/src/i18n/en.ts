@@ -387,6 +387,8 @@ export const en: typeof zhCN = {
     retranscribeFailed: 'Retranscribe failed: {{err}}',
     rawLabel: 'Raw',
     rawEmpty: '(empty)',
+    llmSystemPrompt: 'System Prompt',
+    llmUserPrompt: 'User Prompt',
     selectHint: 'Select an entry on the left to see details.',
     recorded: 'Recorded {{duration}}',
     stepAsr: 'Transcribe',

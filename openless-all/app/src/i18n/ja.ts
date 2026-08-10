@@ -389,6 +389,8 @@ export const ja: typeof zhCN = {
     retranscribeFailed: '再認識に失敗：{{err}}',
     rawLabel: '原文',
     rawEmpty: '（空）',
+    llmSystemPrompt: 'システムプロンプト',
+    llmUserPrompt: 'ユーザープロンプト',
     selectHint: '左側から 1 件選択して詳細を表示。',
     recorded: '録音 {{duration}}',
     stepAsr: '認識',

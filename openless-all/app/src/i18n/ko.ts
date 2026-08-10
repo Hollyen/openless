@@ -389,6 +389,8 @@ export const ko: typeof zhCN = {
     retranscribeFailed: '다시 인식 실패: {{err}}',
     rawLabel: '원문',
     rawEmpty: '(비어 있음)',
+    llmSystemPrompt: '시스템 프롬프트',
+    llmUserPrompt: '사용자 프롬프트',
     selectHint: '왼쪽에서 하나를 선택하여 자세히 보기.',
     recorded: '녹음 {{duration}}',
     stepAsr: '인식',

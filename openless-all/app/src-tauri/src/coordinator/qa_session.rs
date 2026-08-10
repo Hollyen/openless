@@ -725,6 +725,7 @@ pub(super) async fn answer_qa_question_text(
         )
     };
 
+    let mut llm_call: Option<crate::polish::LlmCallRecord> = None;
     let answer = match answer_chat_dispatch(
         &messages_for_llm,
         &working_languages,
@@ -736,6 +737,7 @@ pub(super) async fn answer_qa_question_text(
         pipeline_multimodal_enabled(&inner.prefs.get()),
         on_delta,
         should_cancel,
+        &mut llm_call,
     )
     .await
     {
@@ -803,8 +805,10 @@ pub(super) async fn answer_qa_question_text(
             has_audio_recording: None,
             asr_provider: None,
             asr_model: None,
-            llm_provider: None,
-            llm_model: None,
+            llm_provider: llm_call.as_ref().map(|r| r.provider.clone()),
+            llm_model: llm_call.as_ref().map(|r| r.model.clone()),
+            llm_system_prompt: llm_call.as_ref().and_then(|r| r.system_prompt.clone()),
+            llm_user_prompt: llm_call.as_ref().and_then(|r| r.user_prompt.clone()),
             pipeline_mode: None,
             asr_ms: None,
             polish_ms: None,
@@ -1548,6 +1552,7 @@ pub(super) async fn answer_chat_dispatch<F, C>(
     multimodal: bool,
     on_delta: F,
     should_cancel: C,
+    llm_call: &mut Option<crate::polish::LlmCallRecord>,
 ) -> anyhow::Result<String>
 where
     F: Fn(&str) + Send + Sync,
@@ -1557,6 +1562,7 @@ where
     // OpenAI 兼容通道逐字流式（answer_delta）；Gemini 通道一次性返回。
     if let Some(wav) = audio_wav {
         let provider = build_active_omni_provider(llm_thinking_enabled)?;
+        let label = provider.call_label();
         let system_prompt = crate::polish::compose_qa_system_prompt(
             working_languages,
             chinese_script_preference,
@@ -1568,6 +1574,17 @@ where
             .map(|message| format!("{}: {}", message.role, message.content))
             .collect::<Vec<_>>()
             .join("\n\n");
+        let user_prompt = messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .map(|message| message.content.clone());
+        *llm_call = Some(crate::polish::LlmCallRecord {
+            provider: label.provider,
+            model: label.model,
+            system_prompt: Some(system_prompt.clone()),
+            user_prompt,
+        });
         return Ok(provider
             .complete_streaming(
                 &system_prompt,
@@ -1581,6 +1598,7 @@ where
     // 多模态模式下键盘输入的纯文本问题：omni 模型当文本 LLM 用（无音频 part）。
     if multimodal {
         let provider = build_active_omni_provider(llm_thinking_enabled)?;
+        let label = provider.call_label();
         let system_prompt = crate::polish::compose_qa_system_prompt(
             working_languages,
             chinese_script_preference,
@@ -1592,6 +1610,17 @@ where
             .map(|message| format!("{}: {}", message.role, message.content))
             .collect::<Vec<_>>()
             .join("\n\n");
+        let user_prompt = messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .map(|message| message.content.clone());
+        *llm_call = Some(crate::polish::LlmCallRecord {
+            provider: label.provider,
+            model: label.model,
+            system_prompt: Some(system_prompt.clone()),
+            user_prompt,
+        });
         return Ok(provider
             .complete_streaming(&system_prompt, &user_text, None, on_delta, should_cancel)
             .await?);
@@ -1599,9 +1628,26 @@ where
 
     // 见 polish_text 顶部注释——同样的 Gemini / OpenAI-compatible 路由逻辑，
     // QA 流式回答走 Gemini 原生 :streamGenerateContent?alt=sse。
+    let system_prompt = crate::polish::compose_qa_system_prompt(
+        working_languages,
+        chinese_script_preference,
+        output_language_preference,
+        front_app,
+    );
+    let user_prompt = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.clone());
     let active_llm = CredentialsVault::get_active_llm();
     if active_llm == "gemini" {
         let (api_key, model, base_url) = read_gemini_credentials()?;
+        *llm_call = Some(crate::polish::LlmCallRecord {
+            provider: active_llm.clone(),
+            model: model.clone(),
+            system_prompt: Some(system_prompt.clone()),
+            user_prompt: user_prompt.clone(),
+        });
         let provider = GeminiProvider::new(
             GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
         );
@@ -1619,6 +1665,13 @@ where
     }
 
     let provider = build_active_llm_provider(llm_thinking_enabled)?;
+    let label = provider.call_label();
+    *llm_call = Some(crate::polish::LlmCallRecord {
+        provider: label.provider,
+        model: label.model,
+        system_prompt: Some(system_prompt.clone()),
+        user_prompt: user_prompt.clone(),
+    });
     Ok(provider
         .answer_chat_streaming(
             messages,

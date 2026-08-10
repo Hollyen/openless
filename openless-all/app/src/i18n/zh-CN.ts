@@ -385,6 +385,8 @@ export const zhCN = {
     retranscribeFailed: '重新转录失败：{{err}}',
     rawLabel: '原文',
     rawEmpty: '（空）',
+    llmSystemPrompt: '系统提示词',
+    llmUserPrompt: '用户提示词',
     selectHint: '左侧选一条查看详情。',
     recorded: '录音 {{duration}}',
     stepAsr: '识别',

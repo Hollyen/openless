@@ -387,6 +387,8 @@ export const zhTW: typeof zhCN = {
     retranscribeFailed: '重新轉錄失敗：{{err}}',
     rawLabel: '原文',
     rawEmpty: '（空）',
+    llmSystemPrompt: '系統提示詞',
+    llmUserPrompt: '用戶提示詞',
     selectHint: '左側選一條查看詳情。',
     recorded: '錄音 {{duration}}',
     stepAsr: '辨識',

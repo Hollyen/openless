@@ -146,28 +146,34 @@ pub enum ActiveLLMProvider {
     Codex(CodexOAuthLLMProvider),
 }
 
-/// 一次 LLM 调用的构建时快照（provider id + 归一化后的模型 id）。polish 链路在
-/// **成功构建 provider、即将发起真实调用**时填充；凭据缺失等 preflight 失败不填，
-/// 调用方据此决定要不要把 llm_* / polish_ms 落进历史——避免"没调用却记了模型"的
-/// 伪数据（PR #826 review）。
+/// 一次 LLM 调用的构建时快照（provider id、归一化后的模型 id，以及实际发出去的
+/// system / user prompt）。polish 链路在 **成功构建 provider、即将发起真实调用**时
+/// 填充；凭据缺失等 preflight 失败不填，调用方据此决定要不要把 llm_* / polish_ms
+/// 落进历史——避免"没调用却记了模型"的伪数据（PR #826 review）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LlmCallLabel {
+pub struct LlmCallRecord {
     pub provider: String,
     pub model: String,
+    pub system_prompt: Option<String>,
+    pub user_prompt: Option<String>,
 }
 
 impl ActiveLLMProvider {
     /// 构建时快照：从已构建的 config 读 provider/model（Codex 的 model 已经过
     /// normalize_codex_model 归一化），而不是事后重读全局设置。
-    pub fn call_label(&self) -> LlmCallLabel {
+    pub fn call_label(&self) -> LlmCallRecord {
         match self {
-            Self::OpenAI(p) => LlmCallLabel {
+            Self::OpenAI(p) => LlmCallRecord {
                 provider: p.config.provider_id.clone(),
                 model: p.config.model.clone(),
+                system_prompt: None,
+                user_prompt: None,
             },
-            Self::Codex(p) => LlmCallLabel {
+            Self::Codex(p) => LlmCallRecord {
                 provider: CODEX_OAUTH_PROVIDER_ID.to_string(),
                 model: p.config.model.clone(),
+                system_prompt: None,
+                user_prompt: None,
             },
         }
     }

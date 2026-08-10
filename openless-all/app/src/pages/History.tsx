@@ -16,6 +16,44 @@ import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { chipSelectedStyle } from './settings/shared';
 
+function PromptCollapsible({ title, prompt }: { title: string; prompt: string | null | undefined }) {
+  const [open, setOpen] = useState(false);
+  if (!prompt) return null;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <Btn
+        size="sm"
+        variant="ghost"
+        icon={open ? 'chevDown' : 'chevRight'}
+        onClick={() => setOpen(o => !o)}
+      >
+        {title}
+      </Btn>
+      {open && (
+        <pre
+          style={{
+            margin: '8px 0 0',
+            padding: 12,
+            fontSize: 12,
+            lineHeight: 1.6,
+            fontFamily: 'var(--ol-font-mono)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 300,
+            overflow: 'auto',
+            border: '0.5px solid var(--ol-line)',
+            borderRadius: 10,
+            background: 'var(--ol-surface-2)',
+            color: 'var(--ol-ink-2)',
+          }}
+        >
+          {prompt}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function useFilters(): Array<{ id: 'all' | PolishMode; label: string }> {
   const { t } = useTranslation();
   return [
@@ -561,6 +599,8 @@ export function History() {
                   </p>
                 </div>
               </div>
+              <PromptCollapsible title={t('history.llmSystemPrompt')} prompt={item.llmSystemPrompt} />
+              <PromptCollapsible title={t('history.llmUserPrompt')} prompt={item.llmUserPrompt} />
               {/* 重新润色：拿这条的原文再跑一次 LLM。没有原文就没得润色（转录失败条目），
                   此时整块不渲染；QA 记录的原文是问题而不是待润色文本，同样不渲染。
                   key={item.id} 让切换记录时结果与状态一起重置，

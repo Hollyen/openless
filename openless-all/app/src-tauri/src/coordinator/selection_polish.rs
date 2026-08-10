@@ -276,7 +276,7 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         }
         SelectionPolishOutputMode::PreviewConfirm => {
             let (llm_provider, llm_model) = match llm_call.as_ref() {
-                Some(label) => (Some(label.provider.clone()), Some(label.model.clone())),
+                Some(record) => (Some(record.provider.clone()), Some(record.model.clone())),
                 None => (None, None),
             };
             *inner.selection_polish_preview.lock() = Some(PendingSelectionPolishPreview {
@@ -316,9 +316,14 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
     } else {
         Some(0)
     };
-    let (llm_provider, llm_model) = match llm_call {
-        Some(label) => (Some(label.provider), Some(label.model)),
-        None => (None, None),
+    let (llm_provider, llm_model, llm_system_prompt, llm_user_prompt) = match llm_call {
+        Some(record) => (
+            Some(record.provider),
+            Some(record.model),
+            record.system_prompt,
+            record.user_prompt,
+        ),
+        None => (None, None, None, None),
     };
     let raw_chars = raw_text.chars().count();
     // 与听写路径同口径：应用名与 bundle id 分开存。
@@ -345,6 +350,8 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         asr_model: None,
         llm_provider,
         llm_model,
+        llm_system_prompt,
+        llm_user_prompt,
         pipeline_mode: None,
         asr_ms: None,
         polish_ms,
@@ -469,6 +476,8 @@ impl Coordinator {
             asr_model: None,
             llm_provider: preview.llm_provider,
             llm_model: preview.llm_model,
+            llm_system_prompt: None,
+            llm_user_prompt: None,
             pipeline_mode: None,
             asr_ms: None,
             polish_ms: preview.polish_ms,
