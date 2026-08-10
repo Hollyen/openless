@@ -70,10 +70,10 @@ pub async fn recognize_screen_text(prefs: &UserPreferences) -> anyhow::Result<Op
         engine.ensure_model_downloaded()?;
     }
 
-    // 1. 捕获屏幕：目前 Windows/macOS 支持全屏主屏截图；后续可切换为前台窗口/光标区域。
+    // 1. 捕获屏幕：优先只捕获前台窗口，减少像素量和无关噪声；失败时回退全屏主屏。
     let capture = tokio::task::spawn_blocking({
         let prefs = prefs.clone();
-        move || capture_primary_screen(&prefs)
+        move || capture_foreground_window(&prefs)
     })
     .await
     .map_err(|e| anyhow::anyhow!("capture task panicked: {e}"))?;
@@ -160,11 +160,134 @@ fn capture_primary_screen(_prefs: &UserPreferences) -> anyhow::Result<Option<Vec
     Ok(None)
 }
 
+/// 捕获前台窗口 → PNG 字节；失败时回退到 `capture_primary_screen`。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn capture_foreground_window(prefs: &UserPreferences) -> anyhow::Result<Option<Vec<u8>>> {
+    match try_capture_foreground_window(prefs) {
+        Ok(Some(bytes)) => Ok(Some(bytes)),
+        Ok(None) => {
+            log::warn!(
+                "[ocr] foreground window capture returned None, falling back to primary screen"
+            );
+            capture_primary_screen(prefs)
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if msg.contains("screenRecordingDenied") {
+                return Err(e);
+            }
+            log::warn!(
+                "[ocr] foreground window capture failed: {msg}, falling back to primary screen"
+            );
+            capture_primary_screen(prefs)
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn capture_foreground_window(prefs: &UserPreferences) -> anyhow::Result<Option<Vec<u8>>> {
+    capture_primary_screen(prefs)
+}
+
+/// 仅尝试捕获前台窗口，失败/找不到时返回 None 或 Err。
+#[cfg(target_os = "windows")]
+fn try_capture_foreground_window(_prefs: &UserPreferences) -> anyhow::Result<Option<Vec<u8>>> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    use xcap::Window;
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0 == std::ptr::null_mut() {
+        log::warn!("[ocr] GetForegroundWindow returned null");
+        return Ok(None);
+    }
+    let hwnd_id = hwnd.0 as usize as u32;
+
+    let windows = Window::all().map_err(|e| anyhow::anyhow!("list windows: {e}"))?;
+    let foreground = windows.into_iter().find(|w| {
+        w.id().map(|id| id == hwnd_id).unwrap_or(false)
+    });
+
+    let Some(window) = foreground else {
+        log::warn!("[ocr] foreground window {hwnd_id} not found in xcap window list");
+        return Ok(None);
+    };
+
+    let image = window.capture_image().map_err(|e| {
+        let msg = format!("{e:#}");
+        if msg.contains("screen recording")
+            || msg.contains("not authorized")
+            || msg.contains("access denied")
+        {
+            anyhow::anyhow!("screenRecordingDenied: {msg}")
+        } else {
+            anyhow::anyhow!("capture foreground window: {msg}")
+        }
+    })?;
+
+    let mut buf = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .map_err(|e| anyhow::anyhow!("encode foreground window to PNG: {e}"))?;
+    Ok(Some(buf))
+}
+
+/// macOS：xcap `Window::all()` 内部使用 `CGWindowListCopyWindowInfo` 枚举窗口（按 Z 序
+/// 从顶层到最底层），第一个可见窗口即前台窗口；`capture_image()` 内部使用
+/// `CGWindowListCreateImage` 只捕获该窗口。失败时回退到主屏。
+#[cfg(target_os = "macos")]
+fn try_capture_foreground_window(_prefs: &UserPreferences) -> anyhow::Result<Option<Vec<u8>>> {
+    use xcap::Window;
+
+    let windows = Window::all().map_err(|e| anyhow::anyhow!("list windows: {e}"))?;
+    let foreground = windows.into_iter().next();
+
+    let Some(window) = foreground else {
+        log::warn!("[ocr] no windows found");
+        return Ok(None);
+    };
+
+    let image = window.capture_image().map_err(|e| {
+        let msg = format!("{e:#}");
+        if msg.contains("screen recording")
+            || msg.contains("not authorized")
+            || msg.contains("CGDisplayCreateImage")
+            || msg.contains("kCGError")
+            || msg.contains("access denied")
+        {
+            anyhow::anyhow!("screenRecordingDenied: {msg}")
+        } else {
+            anyhow::anyhow!("capture foreground window: {msg}")
+        }
+    })?;
+
+    let mut buf = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .map_err(|e| anyhow::anyhow!("encode foreground window to PNG: {e}"))?;
+    Ok(Some(buf))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn try_capture_foreground_window(_prefs: &UserPreferences) -> anyhow::Result<Option<Vec<u8>>> {
+    Ok(None)
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::time::timeout;
+
+    #[test]
+    fn foreground_window_capture_failure_fallback_does_not_panic() {
+        // 测试环境可能没有真实前台窗口或截图失败，前台窗口捕获应回退到主屏且不 panic。
+        let result = capture_foreground_window(&UserPreferences::default());
+        assert!(
+            result.is_ok(),
+            "前台窗口捕获失败时回退逻辑不应 panic: {:?}",
+            result.err()
+        );
+    }
 
     /// 真机冒烟测试：使用 RapidOCR 捕获主屏并识别文字。
     /// 需要已下载模型且默认模型目录存在 onnxruntime.dll。

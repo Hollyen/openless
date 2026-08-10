@@ -9,6 +9,7 @@
 //! insertion, persists history, emits `capsule:state` events to the capsule
 //! window.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -558,6 +559,9 @@ struct Inner {
     /// store_asr_for_session 一并写入，end_session 取走落 history——比事后重读
     /// 全局设置可靠：会话中途切 provider/model 不会污染归因（PR #826 review）。
     asr_label: Mutex<Option<SessionResource<AsrCallLabel>>>,
+    /// 后台屏幕上下文捕获任务。begin_session 进入 Listening 后 spawn，
+    /// end_session 在 polish 阶段 await / 取走；所有会话结束路径都会清理并 abort。
+    screen_context_tasks: Mutex<HashMap<SessionId, tokio::task::JoinHandle<Option<String>>>>,
     /// 多模态（Omni）模式下的 dictation 录音 PCM 缓冲。只在
     /// `multimodal_pipeline_enabled && pipeline_mode == multimodal` 时使用，
     /// 与 asr 槽互斥——同一会话二者有且仅有一个。
@@ -833,6 +837,7 @@ impl Coordinator {
                     recorder: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
+                    screen_context_tasks: Mutex::new(HashMap::new()),
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
                     hotkey_trigger_held: AtomicBool::new(false),
@@ -953,6 +958,7 @@ impl Coordinator {
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
+                screen_context_tasks: Mutex::new(HashMap::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
@@ -3276,6 +3282,54 @@ mod tests {
         assert!(!state.pending_stop);
         assert!(!state.cancelled);
         assert_ne!(state.session_id, old_session_id);
+
+        std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
+
+    #[tokio::test]
+    async fn screen_context_task_spawned_and_cleaned_up() {
+        // 验证：begin_session 进入 Listening 后 screen_context_tasks 中存在对应 session_id
+        // 的任务；end_session 正常收尾后该任务被移除。
+        let _guard = ENV_LOCK.lock().await;
+        std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");
+
+        let coordinator = Coordinator::new();
+        let old_session_id = coordinator.inner.state.lock().session_id;
+        // 关闭 screen_context 避免测试真实跑 OCR/截图；只要 map 里存在 handle 即可。
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.screen_context_enabled = false;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+
+        super::begin_session(&coordinator.inner).await.unwrap();
+
+        let state = coordinator.inner.state.lock();
+        assert_eq!(state.phase, SessionPhase::Listening);
+        assert!(!state.cancelled);
+        assert_ne!(state.session_id, old_session_id);
+        let current_session_id = state.session_id;
+        drop(state);
+
+        assert!(
+            coordinator
+                .inner
+                .screen_context_tasks
+                .lock()
+                .contains_key(&current_session_id),
+            "begin_session 后应存在对应 session_id 的后台屏幕上下文任务"
+        );
+
+        super::end_session(&coordinator.inner).await.unwrap();
+
+        assert!(
+            !coordinator
+                .inner
+                .screen_context_tasks
+                .lock()
+                .contains_key(&current_session_id),
+            "end_session 后应移除对应 session_id 的后台屏幕上下文任务"
+        );
 
         std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
     }

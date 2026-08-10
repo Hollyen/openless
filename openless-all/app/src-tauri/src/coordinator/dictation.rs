@@ -11,6 +11,42 @@ use super::qa::handle_qa_option_edge;
 use super::resources::*;
 use super::*;
 
+/// 启动后台屏幕上下文捕获任务，按 session_id 暂存。
+/// 在会话进入 Listening 后尽早 spawn，让 OCR 时间与 ASR 并行。
+fn spawn_screen_context_capture(inner: &Arc<Inner>, session_id: SessionId) {
+    let inner_clone = Arc::clone(inner);
+    let handle = tokio::spawn(async move { capture_screen_context(&inner_clone).await });
+    inner.screen_context_tasks.lock().insert(session_id, handle);
+}
+
+/// 移除并中止指定 session_id 的后台捕获任务。
+fn cleanup_screen_context_task(inner: &Arc<Inner>, session_id: SessionId) {
+    if let Some(handle) = inner.screen_context_tasks.lock().remove(&session_id) {
+        handle.abort();
+    }
+}
+
+/// end_session 全返回路径的屏幕上下文任务清理守卫。
+struct ScreenContextTaskGuard {
+    inner: Arc<Inner>,
+    session_id: SessionId,
+}
+
+impl ScreenContextTaskGuard {
+    fn new(inner: &Arc<Inner>, session_id: SessionId) -> Self {
+        Self {
+            inner: Arc::clone(inner),
+            session_id,
+        }
+    }
+}
+
+impl Drop for ScreenContextTaskGuard {
+    fn drop(&mut self) {
+        cleanup_screen_context_task(&self.inner, self.session_id);
+    }
+}
+
 /// 同一个 hotkey 边沿之间的最小间隔。低于此阈值的连按整体作为误触丢弃 ——
 /// 避免微动开关回弹 / 用户手抖双击造成的空转写报错和 ASR session 抢资源。
 const HOTKEY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -1625,6 +1661,7 @@ pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> R
         emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
         inner.state.lock().phase = SessionPhase::Listening;
         log::info!("[coord] session started (hotkey-injection dry-run)");
+        spawn_screen_context_capture(inner, current_session_id);
         return Ok(());
     }
 
@@ -2602,6 +2639,7 @@ pub(super) fn abort_recording_with_error(inner: &Arc<Inner>, message: String) {
 
     discard_startup_resources_for_session(inner, abort.session_id);
     restore_prepared_windows_ime_session(inner, abort.session_id);
+    cleanup_screen_context_task(inner, abort.session_id);
     {
         let mut state = inner.state.lock();
         publish_abort_idle_after_restore(&mut state, abort.session_id);
@@ -2653,6 +2691,7 @@ pub(super) async fn finish_starting_session(inner: &Arc<Inner>, session_id: Sess
         }
         BeginOutcome::Started | BeginOutcome::PendingStop => {
             log::info!("[coord] session started");
+            spawn_screen_context_capture(inner, session_id);
             if matches!(outcome, BeginOutcome::PendingStop) {
                 log::info!("[coord] applying pending_stop edge → end_session immediately");
                 let _ = end_session(inner).await;
@@ -3062,6 +3101,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         };
         session_id
     };
+    let _screen_context_guard = ScreenContextTaskGuard::new(inner, current_session_id);
 
     let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
@@ -3808,7 +3848,40 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 只累计 provider 请求本身的耗时。流式路径的输入法切换、逐字上屏和队列排空
     // 属于插入阶段，不能混入用于模型对比的 polish_ms。
     let mut llm_elapsed_ms: Option<u64> = None;
-    let screen_context = capture_screen_context(inner).await;
+    let screen_context = {
+        let handle = {
+            let mut tasks = inner.screen_context_tasks.lock();
+            tasks.remove(&current_session_id)
+        };
+        if let Some(handle) = handle {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+                Ok(Ok(Some(text))) => {
+                    let chars = text.chars().count();
+                    log::info!("[screen_context] background task captured {chars} chars");
+                    Some(text)
+                }
+                Ok(Ok(None)) => {
+                    log::info!("[screen_context] background task returned no text");
+                    None
+                }
+                Ok(Err(join_err)) => {
+                    log::warn!("[screen_context] background task panicked: {join_err}");
+                    capture_screen_context(inner).await
+                }
+                Err(_) => {
+                    log::warn!(
+                        "[screen_context] background task timed out after 5s for session {current_session_id}"
+                    );
+                    None
+                }
+            }
+        } else {
+            log::warn!(
+                "[screen_context] no background task found for session {current_session_id}, falling back to synchronous capture"
+            );
+            capture_screen_context(inner).await
+        }
+    };
     let screen_context_ref = screen_context.as_deref();
     let (polished, polish_error, already_streamed) = if translation_active {
         log::info!(
@@ -4531,6 +4604,7 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     stop_recorder_for_session(inner, decision.session_id);
     cancel_asr_for_session(inner, decision.session_id);
     restore_prepared_windows_ime_session(inner, decision.session_id);
+    cleanup_screen_context_task(inner, decision.session_id);
     true
 }
 
