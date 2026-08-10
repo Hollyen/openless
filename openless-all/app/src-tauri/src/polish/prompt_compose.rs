@@ -117,6 +117,19 @@ pub(crate) fn compose_polish_prompts(
     front_app: Option<&str>,
     has_prior_turns: bool,
 ) -> (String, String) {
+    let has_placeholder = style_system_prompt.contains(crate::types::SCREEN_CONTEXT_PLACEHOLDER);
+    let block_chars = build_screen_context_block(screen_context)
+        .as_ref()
+        .map(|s| s.chars().count())
+        .unwrap_or(0);
+    log::info!(
+        "[polish] compose_polish_prompts screen_context_present={} raw_chars={} placeholder_present={} block_chars={}",
+        screen_context.is_some(),
+        screen_context.map(|s| s.chars().count()).unwrap_or(0),
+        has_placeholder,
+        block_chars
+    );
+
     let mut system_prompt = compose_system_prompt(style_system_prompt, hotwords, screen_context);
     if let Some(premise) = context_premise(
         working_languages,

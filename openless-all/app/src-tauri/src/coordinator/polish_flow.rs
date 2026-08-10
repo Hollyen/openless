@@ -211,25 +211,20 @@ pub(super) async fn polish_text(
     if multimodal {
         let provider = super::build_active_omni_provider(llm_thinking_enabled)?;
         let label = provider.call_label();
-        let mut system_prompt = style_system_prompt.to_string();
-        if !hotwords.is_empty() {
-            system_prompt.push_str(&format!(
-                "\n\n# 词典/热词\n以下专有名词必须严格按给定写法准确识别：{}。",
-                hotwords.join("、")
-            ));
-        }
-        if let Some(screen_ctx) = screen_context.filter(|s| !s.trim().is_empty()) {
-            system_prompt.push_str(&format!(
-                "\n\n# 屏幕上下文\n当前用户屏幕中可见的文本如下，供你理解用户意图时参考。这些文本来自屏幕 OCR，可能包含无关 UI 元素；请只关注与当前任务相关的内容，不要直接复述或引用这些文本。\n\n{}",
-                screen_ctx
-            ));
-        }
-        if !working_languages.is_empty() {
-            system_prompt.push_str(&format!(
-                "\n\n# 工作语言\n用户主要在以下语言间工作：{}。",
-                working_languages.join("、")
-            ));
-        }
+        // 复用传统 polish 的 system prompt 装配，保证 {{SCREEN_CONTEXT}} / {{HOTWORDS}}
+        // 占位符被正确替换，并统一注入上下文前提与防御措辞。
+        let (system_prompt, _) = crate::polish::compose_polish_prompts(
+            raw,
+            mode,
+            hotwords,
+            screen_context,
+            style_system_prompt,
+            working_languages,
+            chinese_script_preference,
+            output_language_preference,
+            front_app,
+            !prior_turns.is_empty(),
+        );
         *llm_call = Some(crate::polish::LlmCallRecord {
             provider: label.provider,
             model: label.model,
